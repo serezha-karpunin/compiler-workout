@@ -44,7 +44,30 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
      *)                                                       
-    let eval _ _ = failwith "Not yet implemented"
+    let bool_to_int b = if b then 1 else 0;;
+	let int_to_bool i = i != 0;;
+
+	let get_operator operator = match operator with
+		| "+" -> ( + )
+		| "-" -> ( - )
+		| "*" -> ( * )
+		| "/" -> ( / )
+		| "%" -> ( mod )
+		| "<" -> fun left_expression right_expression -> bool_to_int ( ( < ) left_expression right_expression )
+		| "<=" -> fun left_expression right_expression -> bool_to_int ( ( <= ) left_expression right_expression )
+		| ">"  -> fun left_expression right_expression -> bool_to_int ( ( > ) left_expression right_expression )
+		| ">=" -> fun left_expression right_expression -> bool_to_int ( ( >= ) left_expression right_expression )
+		| "==" -> fun left_expression right_expression -> bool_to_int ( ( == ) left_expression right_expression )
+		| "!=" -> fun left_expression right_expression -> bool_to_int ( ( != ) left_expression right_expression )
+		| "&&" -> fun left_expression right_expression -> bool_to_int ( ( && ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) )
+		| "!!" -> fun left_expression right_expression -> bool_to_int ( ( || ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) );;
+
+	let rec eval state expression = match expression with
+		| Const const -> const
+		| Var var -> state var
+		| Binop (operator, left_expression, right_expression) -> get_operator operator (eval state left_expression) (eval state right_expression);;
+
+
 
     (* Expression parser. You can use the following terminals:
 
@@ -53,7 +76,19 @@ module Expr =
                                                                                                                   
     *)
     ostap (                                      
-      parse: empty {failwith "Not yet implemented"}
+      expr:
+			!(Ostap.Util.expr
+				(fun x -> x)
+				[|
+					`Lefta, [ostap ("!!"), fun x y -> Binop ("!!", x, y)];
+					`Lefta, [ostap ("&&"), fun x y -> Binop ("&&", x, y)];
+					`Nona, [ostap ("<="), (fun x y -> Binop ("<=", x, y)); ostap ("<"), (fun x y -> Binop ("<", x, y)); ostap (">="), (fun x y -> Binop (">=", x, y)); ostap (">"), (fun x y -> Binop (">", x, y)); ostap ("=="), (fun x y -> Binop ("==", x, y)); ostap ("!="), (fun x y -> Binop ("!=", x, y))];
+					`Lefta, [ostap ("+"), (fun x y -> Binop ("+", x, y)); ostap ("-"), (fun x y -> Binop ("-", x, y))];
+					`Lefta, [ostap ("*"), (fun x y -> Binop ("*", x, y)); ostap ("/"), (fun x y -> Binop ("/", x, y)); ostap ("%"), (fun x y -> Binop ("%", x, y))];
+				|]
+				primary
+			);
+		primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" expr -")"
     )
     
   end
@@ -78,11 +113,23 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let eval _ _ = failwith "Not yet implemented"
+    let rec eval config statement = 
+	let (state, input, output) = config in
+	match statement with
+		| Read variable_name -> (match input with
+			| head::tail -> (Expr.update variable_name head state, tail, output))
+		| Write expression -> (state, input, output @ [Expr.eval state expression])
+		| Assign (variable_name, expression) -> (Expr.update variable_name (Expr.eval state expression) state, input, output)
+		| Seq (statement1, statement2) -> eval (eval config statement1) statement2;;
 
     (* Statement parser *)
     ostap (
-      parse: empty {failwith "Not yet implemented"}
+      stmt:
+			x:IDENT ":=" e:!(Expr.expr) {Assign(x, e)}
+			| "read" "(" x:IDENT ")" {Read x}
+			| "write" "(" e:!(Expr.expr) ")" {Write e};
+
+		parse: s:stmt ";" rest:parse {Seq(s, rest)} | stmt	
     )
       
   end
