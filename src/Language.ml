@@ -44,28 +44,30 @@ module Expr =
        Takes a state and an expression, and returns the value of the expression in 
        the given state.
     *)                                                       
-    let bool_to_int b = if b then 1 else 0;;
-	let int_to_bool i = i != 0;;
+    let bool_to_int b = if b then 1 else 0 
+	let int_to_bool i = i != 0 
 
-	let get_operator operator = match operator with
-		| "+" -> ( + )
-		| "-" -> ( - )
-		| "*" -> ( * )
-		| "/" -> ( / )
-		| "%" -> ( mod )
-		| "<" -> fun left_expression right_expression -> bool_to_int ( ( < ) left_expression right_expression )
-		| "<=" -> fun left_expression right_expression -> bool_to_int ( ( <= ) left_expression right_expression )
-		| ">"  -> fun left_expression right_expression -> bool_to_int ( ( > ) left_expression right_expression )
-		| ">=" -> fun left_expression right_expression -> bool_to_int ( ( >= ) left_expression right_expression )
-		| "==" -> fun left_expression right_expression -> bool_to_int ( ( == ) left_expression right_expression )
-		| "!=" -> fun left_expression right_expression -> bool_to_int ( ( != ) left_expression right_expression )
-		| "&&" -> fun left_expression right_expression -> bool_to_int ( ( && ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) )
-		| "!!" -> fun left_expression right_expression -> bool_to_int ( ( || ) ( int_to_bool left_expression ) ( int_to_bool right_expression ) );;
+	let operator op left right = match op with
+	  | "+"  -> left + right
+	  | "-"  -> left - right
+	  | "*"  -> left * right
+	  | "/"  -> left / right
+	  | "%"  -> left mod right
+	  | "==" -> bool_to_int (left = right)
+	  | "!=" -> bool_to_int (left != right)
+	  | "<=" -> bool_to_int (left <= right)
+	  | "<"  -> bool_to_int (left < right)
+	  | ">=" -> bool_to_int (left >= right)
+	  | ">"  -> bool_to_int (left > right)
+	  | "&&" -> bool_to_int (int_to_bool left && int_to_bool right)
+	  | "!!" -> bool_to_int (int_to_bool left || int_to_bool right)
 
-	let rec eval state expression = match expression with
-		| Const const -> const
-		| Var var -> state var
-		| Binop (operator, left_expression, right_expression) -> get_operator operator (eval state left_expression) (eval state right_expression);;
+	let rec eval st exp = match exp with
+	  | Const v -> v
+	  | Var x -> st x
+	  | Binop (op, left, right) -> operator op (eval st left) (eval st right) 
+
+	let prsBinOp op = ostap(- $(op)), (fun x y -> Binop (op, x, y))
 
 
 
@@ -75,20 +77,22 @@ module Expr =
          DECIMAL --- a decimal constant [0-9]+ as a string
                                                                                                                   
     *)
-    ostap (                                      
-      expr:
-			!(Ostap.Util.expr
-				(fun x -> x)
-				[|
-					`Lefta, [ostap ("!!"), fun x y -> Binop ("!!", x, y)];
-					`Lefta, [ostap ("&&"), fun x y -> Binop ("&&", x, y)];
-					`Nona, [ostap ("<="), (fun x y -> Binop ("<=", x, y)); ostap ("<"), (fun x y -> Binop ("<", x, y)); ostap (">="), (fun x y -> Binop (">=", x, y)); ostap (">"), (fun x y -> Binop (">", x, y)); ostap ("=="), (fun x y -> Binop ("==", x, y)); ostap ("!="), (fun x y -> Binop ("!=", x, y))];
-					`Lefta, [ostap ("+"), (fun x y -> Binop ("+", x, y)); ostap ("-"), (fun x y -> Binop ("-", x, y))];
-					`Lefta, [ostap ("*"), (fun x y -> Binop ("*", x, y)); ostap ("/"), (fun x y -> Binop ("/", x, y)); ostap ("%"), (fun x y -> Binop ("%", x, y))];
-				|]
-				primary
-			);
-		primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" expr -")"
+    ostap (
+       expr:
+      	    !(Ostap.Util.expr
+      		    (fun x -> x)
+      		    (Array.map (fun (asc, ops) -> asc, List.map prsBinOp ops)
+                    [|
+                        `Lefta, ["!!"];
+                        `Lefta, ["&&"];
+                        `Nona , ["<="; "<"; ">="; ">"; "=="; "!="];
+                        `Lefta, ["+"; "-"];
+                        `Lefta, ["*"; "/"; "%"];
+                    |]
+                )
+      		    primary
+      		);
+      	primary: x:IDENT {Var x} | c:DECIMAL {Const c} | -"(" expr -")"
     )
     
   end
@@ -106,7 +110,7 @@ module Stmt =
     (* empty statement                  *) | Skip
     (* conditional                      *) | If     of Expr.t * t * t
     (* loop with a pre-condition        *) | While  of Expr.t * t
-    (* loop with a post-condition       *) | RepeatUntil    of t * Expr.t   with show
+    (* loop with a post-condition       *) | RepeatUntil    of t * Expr.t with show
                                                                     
     (* The type of configuration: a state, an input stream, an output stream *)
     type config = Expr.state * int list * int list 
@@ -117,24 +121,28 @@ module Stmt =
 
        Takes a configuration and a statement, and returns another configuration
     *)
-    let rec eval cfg stmt: config =
-        let (s, i, o) = cfg in
-        match stmt with
-            | Read x -> (match i with
-                | z :: i_rest -> (Expr.update x z s, i_rest, o)
-                | _           -> failwith "Input read fail")
-            | Write   e             -> (s, i, o @ [Expr.eval s e])
-            | Assign (x, e)         -> (Expr.update x (Expr.eval s e) s, i, o)
-            | Seq    (s1, s2) -> eval (eval cfg s1) s2
-            | Skip                              -> (s, i, o)
-            | If (e, thenStmt, elseStmt)        -> eval (s, i, o) (if Expr.intToBool (Expr.eval s e) then thenStmt else elseStmt)
-            | While (e, wStmt)                  -> if Expr.intToBool (Expr.eval s e) then eval (eval (s, i, o) wStmt) stmt else (s, i, o)
-            | RepeatUntil (ruStmt, e)           -> let (sNew, iNew, oNew) = eval (s, i, o) ruStmt in
-            if not (Expr.intToBool (Expr.eval sNew e)) then eval (sNew, iNew, oNew) stmt else (sNew, iNew, oNew);;
+    let rec eval cfg stmt = 
+		let (st, input, output) = cfg in 
+		match stmt with
+		  | Read var	-> (match input with
+							| x::rest -> (Expr.update var x st), rest, output 
+							| [] -> failwith("No more input")
+						)
+
+		  | Write expr      -> st, input, (output @ [Expr.eval st expr])
+		  | Assign (var, expr) -> (Expr.update var (Expr.eval st expr) st), input, output
+		  | Seq (t1, t2)       -> eval (eval cfg t1) t2
+		  | Skip                              -> (st, input, output)
+          | If (expr, thenStmt, elseStmt)        -> eval (st, input, output) (if Expr.int_to_bool (Expr.eval st expr) then thenStmt else elseStmt)
+          | While (expr, wStmt)                  -> if Expr.int_to_bool (Expr.eval st expr) then eval (eval (st, input, output) wStmt) stmt else (st, input, output)
+          | RepeatUntil (ruStmt, expr)           -> let (sNew, iNew, oNew) = eval (st, input, output) ruStmt in
+													if not (Expr.int_to_bool (Expr.eval sNew expr)) then eval (sNew, iNew, oNew) stmt else (sNew, iNew, oNew)
+
+
                                
     (* Statement parser *)
     ostap (
-      simple:
+	simple:
         "read" "(" x:IDENT ")"         {Read x}
         | "write" "(" e:!(Expr.expr) ")" {Write e}
         | x:IDENT ":=" e:!(Expr.expr)    {Assign (x, e)};
